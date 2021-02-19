@@ -1,0 +1,317 @@
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+#include <stdio.h>
+#include <unistd.h>
+
+#ifdef __cplusplus
+}
+#endif
+#include <iostream>
+#include "opencv2/opencv.hpp"
+#include <iostream>
+#include <mutex>
+#include "cc_adas.h"
+#include "cc_back_adas.h"
+#if defined(__CV_TPU_183__)
+
+#elif defined(__PLATFORM_Hi3531DV200__)
+#include "hi_common_video.h"
+#include "cc_hi_svp_mem.h"
+#elif defined(__MI_IPU_920G__)
+#include "cc_mi_ipu_image.h"
+#include "mi_ive_datatype.h"
+#include "cc_mi_ipu_mem.h"
+#include "mi_sys.h"
+#endif
+#include "cc_mem.h"
+#include "jsoncpp.cpp"
+
+std::shared_ptr<CcBackAdasResult> res;
+void InterfaceResultCallback(std::shared_ptr<CcBackAdasResult> ret_prt, void *arg)
+{
+    res = ret_prt;
+}
+
+int main(int argnum, char **arg)
+{
+    /*设置相机外参*/
+    int IMAGE_H = 1080;
+    int IMAGE_W = 1280;
+    int FPS = 25;
+    CcAdasCalibrationParam calParam;
+    /*设置相机内参*/
+    calParam.camera_x = 0;
+    calParam.camera_y = -1000;
+    calParam.camera_z = 1450;
+    calParam.focus_length = 6.14;
+    calParam.pixel_length = 0.0042;
+    calParam.vehicle_width = 1800;
+    /*设置消失点*/
+    calParam.crossing = cv::Point(612, 636);
+    /*设置报警预值*/
+    CcAdasWarnConfigParam warm_param;
+    warm_param.nFcwTime = 8000;
+    warm_param.nThwTime = 8000;
+    warm_param.nPcwTime = 8000;
+    warm_param.nLdwThreshold = 50;
+    warm_param.nLdwDistance = 10;
+    CcAdasCarInformation carInformation;
+    /*当前车速*/
+    carInformation.v_speed = 60;
+    /*测试视频素材*/
+    std::string video_file_name = "test_nv12.yuv";
+    if (argnum < 2)
+    {
+        std::cout << "Please enter the configuration file" << std::endl;
+        return -1;
+    }
+    Json::Value root; //定义根节点
+    Json::Reader reader;
+    ifstream in(arg[1], ios::binary); //输入json文件的绝对路径
+    if (!in.is_open())
+    {
+        std::cout << "Configuration file open error" << std::endl;
+        return -2;
+    }
+    if (reader.parse(in, root))
+    {
+        video_file_name = root["fileName"].asString();
+        IMAGE_W = root["imageWidth"].asInt();
+        IMAGE_H = root["imageHeight"].asInt();
+        FPS = root["fps"].asInt();
+        if (FPS == 0)
+        {
+            FPS = 25;
+        }
+        int camera_x = root["camera_x"].asInt();
+        std::cout << camera_x << std::endl;
+        int camera_y = root["camera_y"].asInt();
+        std::cout << camera_y << std::endl;
+        int camera_z = root["camera_z"].asInt();
+        std::cout << camera_z << std::endl;
+        float focus_length = root["focus_length"].asFloat();
+        std::cout << focus_length << std::endl;
+        float pixel_length = root["pixel_length"].asFloat();
+        std::cout << pixel_length << std::endl;
+        int vehicle_width = root["vehicle_width"].asInt();
+        std::cout << vehicle_width << std::endl;
+        int crossing_x = root["crossing_x"].asInt();
+        std::cout << crossing_x << std::endl;
+        int crossing_y = root["crossing_y"].asInt();
+        std::cout << crossing_y << std::endl;
+
+        calParam.camera_x = camera_x == 0 ? calParam.camera_x : camera_x;
+        calParam.camera_y = camera_y == 0 ? calParam.camera_y : camera_y;
+        calParam.camera_z = camera_z == 0 ? calParam.camera_z : camera_z;
+        calParam.focus_length = focus_length == 0 ? calParam.focus_length : focus_length;
+        calParam.pixel_length = pixel_length == 0 ? calParam.pixel_length : pixel_length;
+        calParam.vehicle_width = vehicle_width == 0 ? calParam.vehicle_width : vehicle_width;
+        calParam.crossing.x = crossing_x == 0 ? calParam.crossing.x : crossing_x;
+        calParam.crossing.y = crossing_y == 0 ? calParam.crossing.y : crossing_y;
+
+        int nFcwTime = root["nFcwTime"].asInt();
+        ;
+        int nThwTime = root["nThwTime"].asInt();
+        ;
+        int nPcwTime = root["nPcwTime"].asInt();
+        ;
+        int nLdwThreshold = root["nLdwThreshold"].asInt();
+        ;
+        int nLdwDistance = root["nLdwDistance"].asInt();
+        ;
+
+        warm_param.nFcwTime = nFcwTime == 0 ? warm_param.nFcwTime : nFcwTime;
+        warm_param.nThwTime = nThwTime == 0 ? warm_param.nThwTime : nThwTime;
+        warm_param.nPcwTime = nPcwTime == 0 ? warm_param.nPcwTime : nPcwTime;
+        warm_param.nLdwThreshold = nLdwThreshold == 0 ? warm_param.nLdwThreshold : nLdwThreshold;
+        warm_param.nLdwDistance = nLdwDistance == 0 ? warm_param.nLdwDistance : nLdwDistance;
+
+        int v_speed = root["v_speed"].asInt();
+
+        carInformation.v_speed = v_speed == 0 ? carInformation.v_speed : v_speed;
+
+        std::cout << "Video file:" << video_file_name << " Video Size:" << IMAGE_W << "X" << IMAGE_H << " FPS:" << FPS << std::endl;
+    }
+    else
+    {
+        std::cout << "Configuration file format error" << std::endl;
+        return -3;
+    }
+    FILE *fs = fopen(video_file_name.c_str(), "r"); // 打开视频文件
+    if (!fs)
+    {
+        std::cout << "Video file open error" << std::endl;
+        return -4;
+    }
+
+    //char buffer[IMAGE_W * IMAGE_H * 3];
+    long index = 0;
+    shared_ptr<CcBackAdas> adas(new CcBackAdas()); // 创建后Adas对象
+    CcAdasResourceCfgPath cfgPath;                 // 模型信息描述
+    std::cout << __LINE__ << std::endl;
+#if defined(__CV_TPU_183__) // 晶视adas模型
+    cfgPath.seg_model = "./tpu_lane.cvimodel";
+    cfgPath.od_model = "./tpu_od.cvimodel";
+#elif defined(__MI_IPU_920G__) // sigmarstar的adas模型
+    cfgPath.seg_model = "./sigms_lane.img";
+    cfgPath.od_model = "./sigms_od.img";
+#else                          // 海思的adas模型
+    cfgPath.seg_model = "./lane_inst.wk";
+    cfgPath.od_model = "./od_inst.wk";
+#endif
+    adas->InitCcBackAdas(IMAGE_W, IMAGE_H, &cfgPath);       // 初始化后adas
+    adas->SetResultCallback(InterfaceResultCallback, NULL); // 设置结果回调函数
+    adas->SetFps(FPS);
+    adas->SetCalibrationParam(&calParam); // 设置校准参数
+    //adas->SetWarnConfigParam(&warm_param);
+    //adas->SetVehicleInfo(&carInformation);
+#if defined(__CV_TPU_183__)
+    char buffer[IMAGE_W * IMAGE_H * 3];
+#elif defined(__PLATFORM_Hi3531DV200__)
+    hi_video_frame_info tmp_frame_info = {0};
+    tmp_frame_info.video_frame.width = IMAGE_W;
+    tmp_frame_info.video_frame.height = IMAGE_H;
+    tmp_frame_info.video_frame.stride[0] = IMAGE_W;
+    tmp_frame_info.video_frame.stride[1] = IMAGE_W;
+    tmp_frame_info.video_frame.stride[2] = IMAGE_W;
+    int one_size = tmp_frame_info.video_frame.stride[0] * tmp_frame_info.video_frame.height;
+    unsigned int img_size = one_size * 1.5;
+    std::shared_ptr<CcMem> mem(new CcHiSvpMem());
+    mem->Init(img_size);
+    tmp_frame_info.video_frame.virt_addr[0] = (hi_u64)mem->GetVirtPrt();
+    tmp_frame_info.video_frame.phys_addr[0] = (hi_u64)mem->GetPhysAddr();
+    tmp_frame_info.video_frame.virt_addr[1] = tmp_frame_info.video_frame.virt_addr[0] + one_size;
+    tmp_frame_info.video_frame.phys_addr[1] = tmp_frame_info.video_frame.phys_addr[0] + one_size;
+#elif defined(__MI_IPU_920G__)
+    MI_SYS_FrameData_s tmp_frame_info = {0};
+    tmp_frame_info.ePixelFormat = E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
+    tmp_frame_info.u16Width = IMAGE_W;
+    tmp_frame_info.u16Height = IMAGE_H;
+    tmp_frame_info.u32Stride[0] = IMAGE_W;
+    tmp_frame_info.u32Stride[1] = IMAGE_W * 0.5;
+    tmp_frame_info.u32Stride[2] = 0;
+
+    int one_size = tmp_frame_info.u32Stride[0] * tmp_frame_info.u16Height;
+    unsigned int img_size = one_size * 1.5;
+    std::shared_ptr<CcMem> mem(new CcMiIpuMem());
+    mem->Init(img_size);
+
+    tmp_frame_info.phyAddr[0] = (MI_PHY)mem->GetPhysAddr();
+    tmp_frame_info.pVirAddr[0] = (MI_PHY)mem->GetVirtPrt();
+    tmp_frame_info.phyAddr[1] = (MI_PHY)mem->GetPhysAddr() + one_size;
+    tmp_frame_info.pVirAddr[1] = (MI_PHY)mem->GetVirtPrt() + one_size;
+
+#else
+    char buffer[IMAGE_W * IMAGE_H * 3];
+#endif
+    //  int size = 0;
+    //   size = fread((void *)tmp_frame_info.video_frame.virt_addr[0], 1, IMAGE_W * IMAGE_H * 1.5, fs);
+    //  adas->TryPutFrame((void *)&tmp_frame_info, index);
+    //  cv::Mat image(IMAGE_H * 1.5, IMAGE_W, CV_8UC1, tmp_frame_info.video_frame.virt_addr[0]);
+
+    while (true)
+    {
+        int size = 0;
+#if defined(__CV_TPU_183__)
+        size = fread(buffer, 1, IMAGE_W * IMAGE_H * 1.5, fs);
+        cv::Mat image1(IMAGE_H, IMAGE_W, CV_8UC1, buffer);
+#elif defined(__PLATFORM_Hi3531DV200__)
+        size = fread((void *)tmp_frame_info.video_frame.virt_addr[0], 1, IMAGE_W * IMAGE_H * 1.5, fs);
+#elif defined(__MI_IPU_920G__)
+        size = fread((void *)tmp_frame_info.pVirAddr[0], 1, IMAGE_W * IMAGE_H * 1.5, fs);
+        //std::cout<<size<<" "<<IMAGE_W * IMAGE_H * 1.5<<std::endl;
+#else
+        size = fread(buffer, 1, IMAGE_W * IMAGE_H * 1.5, fs);
+        cv::Mat image1(IMAGE_H, IMAGE_W, CV_8UC1, buffer);
+#endif
+
+        if (size < IMAGE_W * IMAGE_H * 1.5)
+        {
+            std::cout << "video finish!" << std::endl;
+            break;
+        }
+
+#if defined(__CV_TPU_183__)
+        adas->TryPutFrame((void *)&image1, index);
+        cv::Mat image(IMAGE_H * 1.5, IMAGE_W, CV_8UC1, buffer);
+#elif defined(__PLATFORM_Hi3531DV200__)
+        adas->TryPutFrame((void *)&tmp_frame_info, index);
+        cv::Mat image(IMAGE_H * 1.5, IMAGE_W, CV_8UC1, tmp_frame_info.video_frame.virt_addr[0]);
+#elif defined(__MI_IPU_920G__)
+
+        adas->TryPutFrame((void *)&tmp_frame_info, index);
+
+        cv::Mat image(IMAGE_H * 1.5, IMAGE_W, CV_8UC1, tmp_frame_info.pVirAddr[0]);
+#else
+        adas->TryPutFrame((void *)&image1, index);
+        cv::Mat image(IMAGE_H * 1.5, IMAGE_W, CV_8UC1, buffer);
+#endif
+
+        if (res)
+        {
+            usleep(1000 * 1000);
+            cv::Mat show;
+            cv::cvtColor(image, show, cv::COLOR_YUV2BGR_NV12);
+
+            cv::Scalar color[4] = {
+                cv::Scalar(255, 0, 0),
+                cv::Scalar(255, 255, 0),
+                cv::Scalar(255, 0, 255),
+                cv::Scalar(0, 255, 255)};
+
+            for (auto &od : res->other_ods)
+            {
+                cv::Rect r = od.bbox;
+                cv::rectangle(show, r, cv::Scalar(255, 255, 0), 2);
+
+                //左区域
+                cv::line(show, Point(1, 771), Point(477, 571), Scalar(0, 0, 255), 3);
+                cv::line(show, Point(477, 573), Point(811, 573), Scalar(0, 0, 255), 3);
+                cv::line(show, Point(811, 573), Point(203, 1079), Scalar(0, 0, 255), 3);
+
+                //右区域
+                cv::line(show, Point(1847, 1079), Point(1233, 577), Scalar(0, 0, 255), 3);
+                cv::line(show, Point(1233, 577), Point(1603, 577), Scalar(0, 0, 255), 3);
+                cv::line(show, Point(1603, 577), Point(1917, 685), Scalar(0, 0, 255), 3);
+
+                cv::putText(show, std::to_string(od.id), cv::Point(r.x, r.y - 60), 2, 1, cv::Scalar(0, 0, 255));
+                cv::putText(show, std::to_string((int)od.distance.y), cv::Point(r.x, r.y - 35), 2, 1, cv::Scalar(0, 0, 255));
+                cv::putText(show, std::to_string((int)od.velocity.y), cv::Point(r.x, r.y - 2), 2, 1, cv::Scalar(0, 0, 255));
+            }
+
+            if (res->interPolys.size())
+            {
+                // 打印右区域交集点
+                for (int i = 0; i < res->interPolys[0].size(); i++)
+                {
+                    cv::putText(show, std::to_string((int)res->interPolys[0][i].x), cv::Point(100, 50 + (i * 50)), 2, 1, cv::Scalar(0, 0, 255));
+                    cv::putText(show, std::to_string((int)res->interPolys[0][i].y), cv::Point(380, 50 + (i * 50)), 2, 1, cv::Scalar(0, 0, 255));
+                    cv::circle(show, res->interPolys[0][i], 3, cv::Scalar(255, 255, 255), 1);
+                    cv::putText(show, std::to_string((int)i), res->interPolys[0][i], 2, 1, cv::Scalar(255, 255, 255));
+                }
+
+                // 打印报警车辆报警id
+                cv::putText(show, std::to_string((int)res->areaWarningId[0]), cv::Point(380, 810), 2, 1, cv::Scalar(0, 0, 255));
+                cv::putText(show, std::to_string((int)res->areaWarningId[1]), cv::Point(380, 870), 2, 1, cv::Scalar(0, 0, 255));
+                // 打印报警类型 1 为左区域报警 2为右区域
+                cv::putText(show, std::to_string((int)res->flag_areaWarning[0]), cv::Point(380, 940), 2, 1, cv::Scalar(0, 0, 255));
+                cv::putText(show, std::to_string((int)res->flag_areaWarning[1]), cv::Point(380, 1010), 2, 1, cv::Scalar(0, 0, 255));
+                // 打印交集面积和占比
+                cv::putText(show, std::to_string((int)res->area), cv::Point(700, 150), 2, 1, cv::Scalar(0, 0, 255));
+                cv::putText(show, std::to_string((int)res->leftArea), cv::Point(700, 250), 2, 1, cv::Scalar(0, 0, 255));
+
+
+                cv::putText(show, std::to_string((double)res->rightProportion), cv::Point(580, 810), 2, 1, cv::Scalar(0, 0, 255));
+                cv::putText(show, std::to_string((double)res->leftProportion), cv::Point(580, 870), 2, 1, cv::Scalar(0, 0, 255));
+            }
+
+            cv::resize(show, show, cv::Size(show.size().width, show.size().height));
+            cv::imwrite("test_data/" + std::to_string(index) + ".jpg", show);
+            system(("chmod 777 test_data/" + std::to_string(index) + ".jpg").c_str());
+            index++;
+        }
+    }
+    fclose(fs);
+}

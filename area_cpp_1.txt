@@ -1,0 +1,89 @@
+#include "back_adas_area_warning.h"
+
+// 初始化围成区域的4个点
+BackAdasAreaWarning::BackAdasAreaWarning()
+{
+    this->leftAreaPoint = {Point(1, 771), Point(477, 571), Point(811, 573), Point(203, 1079)};
+    this->rightAreaPoint = {Point(1847, 1079), Point(1233, 577), Point(1603, 577), Point(1917, 685)};
+    this->interPoly.reserve(20);
+    this->intersectionArea.reset(new IntersectionArea());
+    this->leftIntersectionArea.reset(new IntersectionArea());
+}
+
+// 设置左右区域点
+void BackAdasAreaWarning::setAreaPoint(const std::vector<cv::Point> &leftAreaPoint, const std::vector<cv::Point> &rightAreaPoint)
+{
+    this->leftAreaPoint = leftAreaPoint;
+    this->rightAreaPoint = rightAreaPoint;
+}
+
+// 更新报警状态
+void BackAdasAreaWarning::Update(std::shared_ptr<std::vector<TrackingBox>> boxsInfo)
+{
+    std::vector<cv::Point> TargetPoint;
+    BackAdasAreaWarning::areaWarnResult.interPolys.clear();
+    memset(areaWarnResult.areaWarningid, 0, sizeof(areaWarnResult.areaWarningid));
+    memset(areaWarnResult.flag_areaWarning, 0, sizeof(areaWarnResult.flag_areaWarning));
+    areaWarnResult.area = areaWarnResult.leftArea = 0;
+    BackAdasAreaWarning::areaWarnResult.rightProportion = 0;
+    BackAdasAreaWarning::areaWarnResult.leftProportion = 0; 
+
+    int i = 0;
+    for (i = 0; i < (*boxsInfo).size(); i++)
+    {
+        TargetPoint.clear();
+        cv::Point2f lbPoint((*boxsInfo)[i].box.x, (*boxsInfo)[i].box.y + (*boxsInfo)[i].box.height);                            // 车辆框框左下角点
+        cv::Point2f ltPoint((*boxsInfo)[i].box.x, (*boxsInfo)[i].box.y);                                                        // 车辆框框左上角点
+        cv::Point2f rtPoint((*boxsInfo)[i].box.x + (*boxsInfo)[i].box.width, (*boxsInfo)[i].box.y);                             // 车辆框框右上角点
+        cv::Point2f rbPoint((*boxsInfo)[i].box.x + (*boxsInfo)[i].box.width, (*boxsInfo)[i].box.y + (*boxsInfo)[i].box.height); // 车辆框框右下角点
+        TargetPoint.push_back(lbPoint);
+        TargetPoint.push_back(ltPoint);
+        TargetPoint.push_back(rtPoint);
+        TargetPoint.push_back(rbPoint);
+        // 求目标面积
+        double targetArea = (*boxsInfo)[i].box.width * (*boxsInfo)[i].box.height;
+
+        // //求两个矩形的交集的面积
+        interPoly.clear();
+        bool aaa = intersectionArea->rectIntersection(rightAreaPoint, TargetPoint, interPoly);
+        leftInterPoly.clear();
+        bool bbb = leftIntersectionArea->rectIntersection(leftAreaPoint, TargetPoint, leftInterPoly);
+        if (aaa)
+        {
+            BackAdasAreaWarning::areaWarnResult.interPolys.push_back(interPoly);
+            double area0 = intersectionArea->getIntersectionArea(); // 得到交集面积
+            rightProportion = area0 / targetArea * 100;             // 目标对象进入右区域部分的面积与目标对象面积的比例
+            BackAdasAreaWarning::areaWarnResult.rightProportion = rightProportion;
+            if (area0 > 0)
+            {
+                BackAdasAreaWarning::areaWarnResult.areaWarningid[0] = (*boxsInfo)[i].id; // 记录报警车辆id
+                areaWarnResult.flag_areaWarning[0] = 2;                                   // 记录报警类型 1为左区域报警  2为右区域报警
+            }
+            BackAdasAreaWarning::areaWarnResult.area = area0;
+            std::cout << "右区域面积：" << area0 << std::endl;
+        }
+        else if (bbb)
+        {
+            BackAdasAreaWarning::areaWarnResult.interPolys.push_back(leftInterPoly);
+            double area0 = leftIntersectionArea->getIntersectionArea(); // 得到交集面积
+            leftProportion = area0 / targetArea * 100;                  // 目标对象进入左区域部分的面积与目标对象面积的比例
+            BackAdasAreaWarning::areaWarnResult.leftProportion = leftProportion;
+            if (area0 > 0)
+            {
+                BackAdasAreaWarning::areaWarnResult.areaWarningid[1] = (*boxsInfo)[i].id; // 记录报警车辆id
+                areaWarnResult.flag_areaWarning[1] = 1;                                   // 记录报警类型 1为左区域报警  2为右区域报警
+            }
+            BackAdasAreaWarning::areaWarnResult.leftArea = area0;
+            std::cout << "左区域面积：" << area0 << std::endl;
+        }
+        else if (aaa || bbb)
+        {
+            break;
+        }
+    }
+}
+
+AreaWarnResult BackAdasAreaWarning::GetAreaWarningResult()
+{
+    return BackAdasAreaWarning::areaWarnResult;
+}

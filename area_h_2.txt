@@ -1,0 +1,42 @@
+#ifndef _BACK_ADAS_AREA_WARNING_H_
+#define _BACK_ADAS_AREA_WARNING_H_
+
+#include <memory>
+#include "tracker.h"
+#include "cc_detector.h"
+#include "opencv2/opencv.hpp"
+#include "motion_estimator.h"
+#include <iostream>
+#include <math.h>
+#include <vector>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include "intersection_area.h"
+
+typedef struct
+{
+    int rightAreaWarningid[10] = {0};                    // 在报警区域范围内的框框的id
+    int leftAreaWarningid[10] = {0};                    // 在报警区域范围内的框框的id
+} AreaWarnResult;
+
+class BackAdasAreaWarning
+{
+private:
+    /* 输入的区域参数 */
+    std::vector<cv::Point> leftAreaPoint;              // 左区域点
+    std::vector<cv::Point> rightAreaPoint;             // 右区域点
+    std::vector<cv::Point> interPoly;                  // 右区域两个矩形交集的点
+    std::vector<cv::Point> leftInterPoly;              // 左区域两个矩形交集的点
+    AreaWarnResult areaWarnResult;                     // 区域检测结构
+    shared_ptr<IntersectionArea> intersectionArea;     //右区域交集面积计算
+    shared_ptr<IntersectionArea> leftIntersectionArea; // 左区域交集面积计算
+    double WarningProportion = 1;                          // 报警比例
+
+public:
+    BackAdasAreaWarning();                                                                                        // 初始化
+    void setAreaPoint(const std::vector<cv::Point> &leftAreaPoint, const std::vector<cv::Point> &rightAreaPoint); // 设置区域点
+    void Update(std::shared_ptr<std::vector<TrackingBox>> boxsInfo);                                              // 检测obj是否在点区域范围
+    AreaWarnResult GetAreaWarningResult();
+};
+
+#endif
